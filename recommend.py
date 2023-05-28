@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
+
+import lenskit.algorithms.user_knn
+import lenskit.algorithms.basic
+import lenskit.algorithms.ranking
 import sklearn.model_selection
 import pandas as pd
 
@@ -21,12 +25,31 @@ def read_json_lines(file_path):
     
     return df
 
+def load_data(filename):
+    # TODO: Make a condition to check if the pickle is there.
+    # ratings = read_pickle("serialized_ratings")
+
+    ratings = read_json_lines("Movies_and_TV.json")
+    ratings = ratings.rename(columns = {"reviewerID": "user", "asin": "item", "overall": "rating"})
+    ratings.to_pickle("serialized_ratings")
+
+    return ratings
+
 
 def main(arguments):
-    reviews = read_json_lines("Movies_and_TV_trimmed.json")
-    train, test = sklearn.model_selection.train_test_split(reviews, test_size = 0.2)
-    # print("Train is: ", train)
-    # print("Test is: ", test)
+    ratings = load_data("Movies_and_TV_trimmed.json")
+
+    train, test = sklearn.model_selection.train_test_split(ratings, test_size = 0.2)
+
+    classifier = lenskit.algorithms.user_knn.UserUser(3)
+    classifier.fit(train)
+
+    unrated_items = lenskit.algorithms.basic.UnratedItemCandidateSelector()
+    unrated_items.fit(ratings)
+
+    topn = lenskit.algorithms.ranking.TopN(classifier, unrated_items)
+
+    print(topn.recommend("A2PANT8U0OJNT4"))
 
 def _load_args():
     parser = argparse.ArgumentParser(description='Generate a recommendation list consisting of 10 items for each user in the testing set.')
