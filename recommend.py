@@ -3,9 +3,19 @@
 import argparse
 import multiprocessing
 
+# Rating Prediction
 import lenskit.algorithms.user_knn
+import lenskit.algorithms.item_knn
+import lenskit.algorithms.mf_common
+import lenskit.algorithms.als
 import lenskit.algorithms.basic
+
+# Ranking Eval
 import lenskit.algorithms.ranking
+import lenskit.topn
+import lenskit.metrics.topn
+import lenskit.metrics.predict
+
 import sklearn.model_selection
 import pandas as pd
 
@@ -66,32 +76,72 @@ def read_json_lines_parallel(filename, ignore_keys=None):
 
 def load_data(filename):
     # TODO: Make a condition to check if the pickle is there.
-    # ratings = read_pickle("serialized_ratings")
+    ratings = pd.read_pickle("serialized_ratings")
+    # ratings = pd.read_pickle("serialized_ratings_trimmed")
 
-    ratings = read_json_lines_parallel("Movies_and_TV_trimmed.json")
-    ratings = ratings.rename(columns = {"reviewerID": "user", "asin": "item", "overall": "rating"})
-    ratings.to_pickle("serialized_ratings")
+    # ratings = read_json_lines_parallel("Movies_and_TV.json")
+    # ratings = ratings.rename(columns = {"reviewerID": "user", "asin": "item", "overall": "rating"})
+    # ratings.to_pickle("serialized_ratings")
 
     return ratings
+
+def predict_ratings_for_users(classifier, test):
+    predictions = []
+    for index, review in test.iterrows():
+        # print("Looking at test review: \n", review)
+        predictions.append(classifier.predict_for_user(review["user"], [review["item"]])[0])
+        
+    return predictions
 
 
 def main(arguments):
     print("Loading data...")
-    ratings = load_data("Movies_and_TV_trimmed.json")
+    ratings = load_data("Movies_and_TV.json")
 
     train, test = sklearn.model_selection.train_test_split(ratings, test_size = 0.2)
+    # print("test_columns are: ", test.columns)
 
-    print("Fitting User User...")
-    classifier = lenskit.algorithms.user_knn.UserUser(3)
+    # print("Fitting User User...")
+    # classifier = lenskit.algorithms.user_knn.UserUser(30)
+    print("Fitting Item Item...")
+    classifier = lenskit.algorithms.item_knn.ItemItem(30)
+
+    # print("Matrix Factorizing...")
+    # classifier = lenskit.algorithms.als.BiasedMF(10)
+
     classifier.fit(train)
 
-    print("Fitting Candidate Selector...")
-    unrated_items = lenskit.algorithms.basic.UnratedItemCandidateSelector()
-    unrated_items.fit(ratings)
+    print("Predicting ratings for test users")
+    test_ratings_pred = predict_ratings_for_users(classifier, test)
+    test_ratings_ground = list(ratings['rating'])
 
-    topn = lenskit.algorithms.ranking.TopN(classifier, unrated_items)
+    # print("test_ratings_pred are: ", test_ratings_pred)
+    # print("test_ratings_ground are: ", test_ratings_ground)
+    rmse = lenskit.metrics.predict.rmse(test_ratings_pred, test_ratings_ground)
+    mae = lenskit.metrics.predict.mae(test_ratings_pred, test_ratings_ground)
+    print("rmse is: ", rmse)
+    print("mae is: ", mae)
 
-    print(topn.recommend("A2PANT8U0OJNT4"))
+
+    # print("Fitting Candidate Selector...")
+    # candidate_selector = lenskit.algorithms.basic.UnratedItemCandidateSelector()
+    # candidate_selector.fit(ratings)
+
+    # topn = lenskit.algorithms.ranking.TopN(classifier, candidate_selector)
+
+    # analyzer = lenskit.topn.RecListAnalysis()
+    # analyzer.add_metric(lenskit.metrics.topn.precision, k = 10)
+    # analyzer.add_metric(lenskit.metrics.topn.recall, k = 10)
+
+    # print("Test users: \n", set(test['user']))
+
+    # print("candidate_selector is: \n", candidate_selector)
+    # print("Recommending items for user... \n")
+
+    # rec_frame = topn.recommend("A1Z0Y3THM81OY2", n=10)
+    # rec_frame["user"] = "A1Z0Y3THM81OY2"
+    # scores = analyzer.compute(rec_frame, test) 
+    # print(scores)
 
 def _load_args():
     parser = argparse.ArgumentParser(description='Generate a recommendation list consisting of 10 items for each user in the testing set.')
