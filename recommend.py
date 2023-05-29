@@ -20,26 +20,6 @@ import sklearn.model_selection
 import pandas as pd
 
 
-# Deprecated, since it's slow.
-def read_json_lines(file_path):
-    # Initialize an empty list to store the parsed JSON objects
-    data = []
-    
-    # Read the file line by line
-    i = 0
-    with open(file_path, 'r') as file:
-        for line in file:
-            print("On line: ", i)
-            # Parse the JSON object from each line
-            json_obj = pd.read_json(line, typ='series', convert_dates=False)
-            data.append(json_obj)
-            i += 1
-    
-    # Create a DataFrame from the parsed JSON objects
-    df = pd.DataFrame(data)
-    
-    return df
-
 def parse_json_line(line):
     return pd.read_json(line, typ='series', convert_dates=False)
 
@@ -75,10 +55,9 @@ def read_json_lines_parallel(filename, ignore_keys=None):
     return df
 
 def load_data(filename):
-    # TODO: Make a condition to check if the pickle is there.
     ratings = pd.read_pickle("serialized_ratings")
-    # ratings = pd.read_pickle("serialized_ratings_trimmed")
 
+    # If not serialized, then uncomment these to re-serialize them.
     # ratings = read_json_lines_parallel("Movies_and_TV.json")
     # ratings = ratings.rename(columns = {"reviewerID": "user", "asin": "item", "overall": "rating"})
     # ratings.to_pickle("serialized_ratings")
@@ -88,10 +67,17 @@ def load_data(filename):
 def predict_ratings_for_users(classifier, test):
     predictions = []
     for index, review in test.iterrows():
-        # print("Looking at test review: \n", review)
         predictions.append(classifier.predict_for_user(review["user"], [review["item"]])[0])
         
     return predictions
+
+def recommend_for_all_users(classifier, users):
+    whole_rec_frame = pd.DataFrame()
+    for user in users:
+        user_rec_frame = classifier.recommend(user, n=10)
+        whole_rec_frame = pd.concat([user_rec_frame, whole_rec_frame])
+
+    return whole_rec_frame
 
 
 def main(arguments):
@@ -99,49 +85,60 @@ def main(arguments):
     ratings = load_data("Movies_and_TV.json")
 
     train, test = sklearn.model_selection.train_test_split(ratings, test_size = 0.2)
-    # print("test_columns are: ", test.columns)
 
+    ########################################
+    ## User based Collaborative Filtering ##
+    ########################################
     # print("Fitting User User...")
     # classifier = lenskit.algorithms.user_knn.UserUser(30)
-    print("Fitting Item Item...")
-    classifier = lenskit.algorithms.item_knn.ItemItem(30)
 
-    # print("Matrix Factorizing...")
-    # classifier = lenskit.algorithms.als.BiasedMF(10)
+    ########################################
+    ## Item based Collaborative Filtering ##
+    ########################################
+    # print("Fitting Item Item...")
+    # classifier = lenskit.algorithms.item_knn.ItemItem(30)
+
+    ##########################
+    ## Matrix Factorization ##
+    ##########################
+    print("Matrix Factorizing...")
+    classifier = lenskit.algorithms.als.BiasedMF(30)
 
     classifier.fit(train)
 
-    print("Predicting ratings for test users")
+    #######################
+    ## Rating Prediction ##
+    #######################
+    # print("Predicting ratings for test users")
     test_ratings_pred = predict_ratings_for_users(classifier, test)
     test_ratings_ground = list(ratings['rating'])
 
-    # print("test_ratings_pred are: ", test_ratings_pred)
-    # print("test_ratings_ground are: ", test_ratings_ground)
     rmse = lenskit.metrics.predict.rmse(test_ratings_pred, test_ratings_ground)
     mae = lenskit.metrics.predict.mae(test_ratings_pred, test_ratings_ground)
     print("rmse is: ", rmse)
     print("mae is: ", mae)
 
 
-    # print("Fitting Candidate Selector...")
-    # candidate_selector = lenskit.algorithms.basic.UnratedItemCandidateSelector()
-    # candidate_selector.fit(ratings)
+    ###########################
+    ## Ranking Unrated Items ##
+    ###########################
+    print("Fitting Candidate Selector...")
+    candidate_selector = lenskit.algorithms.basic.UnratedItemCandidateSelector()
+    candidate_selector.fit(ratings)
 
-    # topn = lenskit.algorithms.ranking.TopN(classifier, candidate_selector)
+    topn = lenskit.algorithms.ranking.TopN(classifier, candidate_selector)
 
-    # analyzer = lenskit.topn.RecListAnalysis()
-    # analyzer.add_metric(lenskit.metrics.topn.precision, k = 10)
-    # analyzer.add_metric(lenskit.metrics.topn.recall, k = 10)
 
-    # print("Test users: \n", set(test['user']))
+    print("Generating top 10 for each user")
+    recs = recommend_for_all_users(topn, test['user'])
+    recs.to_pickle("serialized_recs")
 
-    # print("candidate_selector is: \n", candidate_selector)
-    # print("Recommending items for user... \n")
+    analyzer = lenskit.topn.RecListAnalysis()
+    analyzer.add_metric(lenskit.metrics.topn.precision, k = 10)
+    analyzer.add_metric(lenskit.metrics.topn.recall, k = 10)
 
-    # rec_frame = topn.recommend("A1Z0Y3THM81OY2", n=10)
-    # rec_frame["user"] = "A1Z0Y3THM81OY2"
-    # scores = analyzer.compute(rec_frame, test) 
-    # print(scores)
+    scores = analyzer.compute(rec_frame, test) 
+    print(scores)
 
 def _load_args():
     parser = argparse.ArgumentParser(description='Generate a recommendation list consisting of 10 items for each user in the testing set.')
